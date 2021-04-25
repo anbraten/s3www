@@ -10,7 +10,7 @@ import (
 	"github.com/victorspringer/http-cache/adapter/memory"
 )
 
-func cacheHandle(h http.Handler) http.Handler {
+func cacheHandle(h http.Handler, ttl int) http.Handler {
 
 	memcached, err := memory.NewAdapter(
 		memory.AdapterWithAlgorithm(memory.LRU),
@@ -24,7 +24,7 @@ func cacheHandle(h http.Handler) http.Handler {
 
 	cacheClient, err := cache.NewClient(
 		cache.ClientWithAdapter(memcached),
-		cache.ClientWithTTL(3*time.Minute),
+		cache.ClientWithTTL(time.Duration(ttl)*time.Second),
 		cache.ClientWithRefreshKey("opn"),
 	)
 
