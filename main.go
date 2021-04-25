@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -17,6 +18,40 @@ import (
 	"github.com/minio/minio-go/v7/pkg/s3utils"
 )
 
+func tryFileOrIndex(ctx context.Context, s3 *S3, name string) (*minio.Object, error) {
+	names := [2]string{name, name + "/index.html"}
+	for _, n := range names {
+		obj, err := getObject(ctx, s3, n)
+
+		if err != nil {
+			// do not log "file" in bucket not found errors
+			if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+				continue
+			}
+
+			return nil, err
+		}
+
+		return obj, nil
+	}
+
+	return nil, os.ErrNotExist
+}
+
+func getObject(ctx context.Context, s3 *S3, name string) (*minio.Object, error) {
+	obj, err := s3.Client.GetObject(ctx, s3.bucket, name, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = obj.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	return obj, nil
+}
+
 // S3 - A S3 implements FileSystem using the minio client
 // allowing access to your S3 buckets and objects.
 //
@@ -30,6 +65,7 @@ type S3 struct {
 
 // Open - implements http.Filesystem implementation.
 func (s3 *S3) Open(name string) (http.File, error) {
+	// path is a directory
 	if strings.HasSuffix(name, pathSeparator) {
 		return &httpMinioObject{
 			client: s3.Client,
@@ -40,8 +76,9 @@ func (s3 *S3) Open(name string) (http.File, error) {
 		}, nil
 	}
 
+	// check if file or path with
 	name = strings.TrimPrefix(name, pathSeparator)
-	obj, err := getObject(context.Background(), s3, name)
+	obj, err := tryFileOrIndex(context.Background(), s3, name)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -55,28 +92,52 @@ func (s3 *S3) Open(name string) (http.File, error) {
 	}, nil
 }
 
-func getObject(ctx context.Context, s3 *S3, name string) (*minio.Object, error) {
-	names := [4]string{name, name + "/index.html", name + "/index.htm", "/404.html"}
-	for _, n := range names {
-		obj, err := s3.Client.GetObject(ctx, s3.bucket, n, minio.GetObjectOptions{})
-		if err != nil {
-			log.Println(err)
-			continue
-		}
+type NotFoundRedirectRespWr struct {
+	http.ResponseWriter // We embed http.ResponseWriter
+	status              int
+}
 
-		_, err = obj.Stat()
-		if err != nil {
-			// do not log "file" in bucket not found errors
-			if minio.ToErrorResponse(err).Code != "NoSuchKey" {
-				log.Println(err)
-			}
-			continue
-		}
-
-		return obj, nil
+func (w *NotFoundRedirectRespWr) WriteHeader(status int) {
+	w.status = status // Store the status for our own use
+	if status != http.StatusNotFound {
+		w.ResponseWriter.WriteHeader(status)
 	}
+}
 
-	return nil, os.ErrNotExist
+func (w *NotFoundRedirectRespWr) Write(p []byte) (int, error) {
+	if w.status != http.StatusNotFound {
+		return w.ResponseWriter.Write(p)
+	}
+	return len(p), nil // Lie that we successfully written it
+}
+
+func wrapHandler(h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nfrw := &NotFoundRedirectRespWr{ResponseWriter: w}
+		h.ServeHTTP(nfrw, r)
+		if nfrw.status == 404 {
+			// TODO
+			const custom202PageExists = true
+			const custom404Pageexists = true
+
+			// use 202.html file
+			if custom202PageExists {
+				w.WriteHeader(200)
+				fmt.Fprintln(w, "This will be a custom 202.html page")
+				return
+			}
+
+			// use 404.html file
+			if custom404Pageexists {
+				w.WriteHeader(200)
+				fmt.Fprintln(w, "This will be a custom 404.html page")
+				return
+			}
+
+			// default 404 error
+			fmt.Fprintln(w, "404 page not found")
+		}
+	}
 }
 
 var (
@@ -175,7 +236,10 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	mux := http.FileServer(&S3{client, bucket})
+	mux := http.NewServeMux()
+	fsHandler := wrapHandler(http.FileServer(&S3{client, bucket}))
+	mux.Handle("/", fsHandler)
+
 	if letsEncrypt {
 		log.Printf("Started listening on https://%s\n", address)
 		certmagic.HTTPS([]string{address}, mux)
