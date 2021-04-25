@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -16,8 +15,6 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/minio/minio-go/v7/pkg/s3utils"
-	cache "github.com/victorspringer/http-cache"
-	"github.com/victorspringer/http-cache/adapter/memory"
 )
 
 // S3 - A S3 implements FileSystem using the minio client
@@ -91,6 +88,7 @@ var (
 	tlsCert     string
 	tlsKey      string
 	letsEncrypt bool
+	useCache    bool
 )
 
 func init() {
@@ -102,6 +100,7 @@ func init() {
 	flag.StringVar(&tlsCert, "ssl-cert", "", "TLS certificate for this server")
 	flag.StringVar(&tlsKey, "ssl-key", "", "TLS private key for this server")
 	flag.BoolVar(&letsEncrypt, "lets-encrypt", false, "Enable Let's Encrypt")
+	flag.BoolVar(&useCache, "useCache", false, "Enable caching of http responses")
 }
 
 // NewCustomHTTPTransport returns a new http configuration
@@ -178,28 +177,12 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	memcached, err := memory.NewAdapter(
-		memory.AdapterWithAlgorithm(memory.LRU),
-		memory.AdapterWithCapacity(10_000_000),
-	)
+	mux := http.FileServer(&S3{client, bucket})
 
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if useCache {
+		log.Printf("Using cache for http request\n")
+		mux = cacheHandle(mux)
 	}
-
-	cacheClient, err := cache.NewClient(
-		cache.ClientWithAdapter(memcached),
-		cache.ClientWithTTL(3*time.Minute),
-		cache.ClientWithRefreshKey("opn"),
-	)
-
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	mux := cacheClient.Middleware(http.FileServer(&S3{client, bucket}))
 
 	if letsEncrypt {
 		log.Printf("Started listening on https://%s\n", address)
