@@ -88,6 +88,8 @@ var (
 	tlsCert     string
 	tlsKey      string
 	letsEncrypt bool
+	useCache    bool
+	cacheTTL    int
 )
 
 func init() {
@@ -99,6 +101,8 @@ func init() {
 	flag.StringVar(&tlsCert, "ssl-cert", "", "TLS certificate for this server")
 	flag.StringVar(&tlsKey, "ssl-key", "", "TLS private key for this server")
 	flag.BoolVar(&letsEncrypt, "lets-encrypt", false, "Enable Let's Encrypt")
+	flag.BoolVar(&useCache, "use-cache", false, "Enable caching of http responses (default: disabled)")
+	flag.IntVar(&cacheTTL, "cache-ttl", 300, "TTL of items in cache (default: 300 seconds)")
 }
 
 // NewCustomHTTPTransport returns a new http configuration
@@ -176,6 +180,12 @@ func main() {
 	}
 
 	mux := http.FileServer(&S3{client, bucket})
+
+	if useCache {
+		log.Printf("Using cache for http request (ttl: %d seconds)\n", cacheTTL)
+		mux = cacheHandle(mux, cacheTTL)
+	}
+
 	if letsEncrypt {
 		log.Printf("Started listening on https://%s\n", address)
 		certmagic.HTTPS([]string{address}, mux)
