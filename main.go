@@ -36,19 +36,21 @@ type S3 struct {
 
 // Open - implements http.Filesystem implementation.
 func (s3 *S3) Open(name string) (http.File, error) {
-	// isDirectory := strings.HasSuffix(name, pathSeparator)
-	path := path.Join(s3.options.root, name)
+	path := path.Clean(name)
 
-	// if isDirectory {
-	// 	return &httpMinioObject{
-	// 		client: s3.Client,
-	// 		object: nil,
-	// 		isDir:  true,
-	// 		bucket: bucket,
-	// 		prefix: path,
-	// 	}, nil
-	// }
+	// used to serve "/"
+	isDirectory := strings.HasSuffix(name, pathSeparator)
+	if isDirectory {
+		return &httpMinioObject{
+			client: s3.Client,
+			object: nil,
+			isDir:  true,
+			bucket: bucket,
+			prefix: strings.TrimSuffix(name, pathSeparator),
+		}, nil
+	}
 
+	path = strings.TrimPrefix(path, pathSeparator)
 	obj, err := getObject(context.Background(), s3, path)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -64,9 +66,12 @@ func (s3 *S3) Open(name string) (http.File, error) {
 }
 
 func getObject(ctx context.Context, s3 *S3, name string) (*minio.Object, error) {
-	paths := [3]string{name, path.Join(name, "index.html"), "/404.html"}
+	paths := [3]string{
+		path.Join(s3.options.root, name),
+		path.Join(s3.options.root, name, "index.html"),
+		path.Join(s3.options.root, "404.html"),
+	}
 	for _, path := range paths {
-		log.Println("try:", path)
 		obj, err := s3.Client.GetObject(ctx, s3.bucket, path, minio.GetObjectOptions{})
 		if err != nil {
 			log.Println(err)
