@@ -54,5 +54,5 @@ dockers:
     goarch: amd64
     dockerfile: Dockerfile
     image_templates:
-      - "y4m4/s3www:{{ .Tag }}"
-      - "y4m4/s3www:latest"
+      - "anbraten/s3www:{{ .Tag }}"
+      - "anbraten/s3www:latest"
